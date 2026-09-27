@@ -1,0 +1,2 @@
+[console_scripts]
+dep-graph-guard = dep_graph_guard.server:main

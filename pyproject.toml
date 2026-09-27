@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dep-graph-guard"
+version = "0.1.0"
+description = "Language-agnostic MCP server for dependency-graph impact analysis"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0",
+    "networkx>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+]
+
+[project.scripts]
+dep-graph-guard = "dep_graph_guard.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Dep Graph — Galaxium Backend</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0f1117;color:#e6edf3;font-family:-apple-system,"Segoe UI",system-ui,sans-serif;height:100vh;overflow:hidden;display:flex;flex-direction:column}
+
+  /* toolbar */
+  #toolbar{display:flex;align-items:center;gap:12px;padding:10px 16px;background:#161b22;border-bottom:1px solid #30363d;flex-shrink:0;flex-wrap:wrap}
+  #toolbar h1{font-size:14px;font-weight:600;color:#e6edf3;white-space:nowrap}
+  .sep{width:1px;height:20px;background:#30363d}
+  #filters{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  #filters label{font-size:12px;color:#8b949e;display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
+  #filters input[type=checkbox]{width:13px;height:13px;accent-color:#58a6ff;cursor:pointer}
+  #search{background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:4px 10px;font-size:12px;width:170px;outline:none;margin-left:auto}
+  #search::placeholder{color:#484f58}
+  #search:focus{border-color:#58a6ff}
+
+  /* canvas */
+  #canvas{flex:1;position:relative;overflow:hidden}
+  svg{width:100%;height:100%}
+
+  .link-import  {stroke:#d29922;stroke-opacity:.3}
+  .link-contains{stroke:#58a6ff;stroke-opacity:.25}
+  .link-calls   {stroke:#bc8cff;stroke-opacity:.5;stroke-dasharray:5 3}
+
+  .node{cursor:pointer}
+  .node.dimmed   circle{opacity:.15} .node.dimmed   text{opacity:.1}
+  .link.dimmed{opacity:.05!important}
+  .link.lit{stroke-opacity:1!important}
+  .node.lit circle{stroke-width:2.8!important}
+
+  /* tooltip */
+  #tip{position:fixed;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px 14px;font-size:12px;line-height:1.7;pointer-events:none;opacity:0;transition:opacity .12s;max-width:260px;z-index:200;box-shadow:0 8px 28px rgba(0,0,0,.6)}
+  #tip .t-id{font-weight:600;color:#e6edf3;margin-bottom:3px;word-break:break-all;font-size:11.5px}
+  #tip .t-kind{font-size:11px;margin-bottom:6px;font-weight:500}
+  #tip .t-row{font-size:11px;color:#8b949e;display:flex;justify-content:space-between;gap:12px}
+  #tip .t-row span{color:#e6edf3}
+
+  /* legend */
+  #legend{position:absolute;bottom:16px;left:16px;background:#161b22cc;border:1px solid #30363d;border-radius:8px;padding:10px 14px;font-size:11.5px;line-height:2;backdrop-filter:blur(8px)}
+  .lr{display:flex;align-items:center;gap:8px}
+  .ld{width:9px;height:9px;border-radius:50%;flex-shrink:0;border:1.5px solid transparent}
+  .ll{width:22px;height:2px;flex-shrink:0}
+
+  /* hint */
+  #hint{position:absolute;bottom:16px;right:16px;font-size:11px;color:#484f58;line-height:1.7;text-align:right}
+
+  /* stats bar */
+  #stats{position:absolute;top:10px;right:14px;font-size:11px;color:#8b949e;background:#161b22cc;padding:5px 10px;border-radius:6px;border:1px solid #30363d}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>📦 Galaxium Backend · Dependency Graph</h1>
+  <div class="sep"></div>
+  <div id="filters">
+    <label><input type="checkbox" id="chk-import"   checked> <span style="color:#d29922">─</span> imports</label>
+    <label><input type="checkbox" id="chk-contains" checked> <span style="color:#58a6ff">─</span> contains</label>
+    <label><input type="checkbox" id="chk-calls"    checked> <span style="color:#bc8cff">╌</span> calls</label>
+    <label><input type="checkbox" id="chk-tests">           show tests</label>
+  </div>
+  <input id="search" type="text" placeholder="🔍  filter nodes…"/>
+</div>
+
+<div id="canvas"><svg id="svg">
+  <defs>
+    <marker id="m-import"   markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0L6,3L0,6Z" fill="#d29922" opacity=".6"/></marker>
+    <marker id="m-contains" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0L6,3L0,6Z" fill="#58a6ff" opacity=".5"/></marker>
+    <marker id="m-calls"    markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0L6,3L0,6Z" fill="#bc8cff" opacity=".8"/></marker>
+  </defs>
+  <g id="scene"/>
+</svg></div>
+
+<div id="tip"></div>
+
+<div id="legend">
+  <div class="lr"><span class="ld" style="background:#1a2a40;border-color:#58a6ff"></span> source file</div>
+  <div class="lr"><span class="ld" style="background:#2d1a1a;border-color:#f85149"></span> model class</div>
+  <div class="lr"><span class="ld" style="background:#2a2010;border-color:#d29922"></span> schema class</div>
+  <div class="lr"><span class="ld" style="background:#142014;border-color:#3fb950"></span> function / method</div>
+  <div style="margin-top:4px">
+    <div class="lr"><span class="ll" style="background:#d29922;opacity:.7"></span> import</div>
+    <div class="lr"><span class="ll" style="background:#58a6ff;opacity:.6"></span> contains</div>
+    <div class="lr"><span class="ll" style="background:repeating-linear-gradient(90deg,#bc8cff 0,#bc8cff 5px,transparent 5px,transparent 8px)"></span> calls</div>
+  </div>
+</div>
+
+<div id="stats"></div>
+<div id="hint">scroll · zoom<br>drag · pan<br>click · highlight</div>
+
+<script>
+// ── DATA ─────────────────────────────────────────────────────────────────────
+const RAW_NODES = [
+  {id:"db.py",kind:"file"},{id:"models.py",kind:"file"},{id:"schemas.py",kind:"file"},
+  {id:"seed.py",kind:"file"},{id:"server.py",kind:"file"},
+  {id:"services/__init__.py",kind:"file"},{id:"services/booking.py",kind:"file"},
+  {id:"services/flight.py",kind:"file"},{id:"services/user.py",kind:"file"},
+  {id:"tests/conftest.py",kind:"file",test:1},{id:"tests/test_rest.py",kind:"file",test:1},
+  {id:"tests/test_services.py",kind:"file",test:1},
+  // models
+  {id:"models.py::Booking",kind:"model"},{id:"models.py::Flight",kind:"model"},{id:"models.py::User",kind:"model"},
+  // schemas
+  {id:"schemas.py::ErrorResponse",kind:"schema"},{id:"schemas.py::FlightOut",kind:"schema"},
+  // db fns
+  {id:"db.py::SessionLocal",kind:"fn"},{id:"db.py::get_db",kind:"fn"},{id:"db.py::init_db",kind:"fn"},
+  // seed
+  {id:"seed.py::seed",kind:"fn"},
+  // server endpoints
+  {id:"server.py::lifespan",kind:"fn"},{id:"server.py::health_check",kind:"fn"},
+  {id:"server.py::register_user_endpoint",kind:"fn"},{id:"server.py::get_user_endpoint",kind:"fn"},
+  {id:"server.py::book_flight_endpoint",kind:"fn"},{id:"server.py::cancel_booking_endpoint",kind:"fn"},
+  {id:"server.py::get_flights",kind:"fn"},{id:"server.py::get_user_bookings",kind:"fn"},
+  // booking service
+  {id:"services/booking.py::book_flight",kind:"fn"},
+  {id:"services/booking.py::cancel_booking",kind:"fn"},
+  {id:"services/booking.py::get_bookings",kind:"fn"},
+  // flight service
+  {id:"services/flight.py::_flight_to_out",kind:"fn"},{id:"services/flight.py::list_flights",kind:"fn"},
+  // user service
+  {id:"services/user.py::is_valid_email",kind:"fn"},{id:"services/user.py::register_user",kind:"fn"},
+  {id:"services/user.py::get_user",kind:"fn"},{id:"services/user.py::update_user",kind:"fn"},
+  // conftest
+  {id:"tests/conftest.py::client",kind:"fn",test:1},{id:"tests/conftest.py::db_session",kind:"fn",test:1},
+  {id:"tests/conftest.py::sample_booking_data",kind:"fn",test:1},
+  {id:"tests/conftest.py::sample_flight_data",kind:"fn",test:1},
+  {id:"tests/conftest.py::sample_user_data",kind:"fn",test:1},
+];
+
+const RAW_EDGES = [
+  // imports
+  {s:"db.py",t:"models.py",k:"import"},
+  {s:"seed.py",t:"db.py",k:"import"},{s:"seed.py",t:"models.py",k:"import"},
+  {s:"server.py",t:"db.py",k:"import"},{s:"server.py",t:"schemas.py",k:"import"},
+  {s:"server.py",t:"seed.py",k:"import"},{s:"server.py",t:"services/__init__.py",k:"import"},
+  {s:"server.py",t:"services/booking.py",k:"import"},{s:"server.py",t:"services/flight.py",k:"import"},
+  {s:"server.py",t:"services/user.py",k:"import"},
+  {s:"services/__init__.py",t:"services/booking.py",k:"import"},
+  {s:"services/__init__.py",t:"services/flight.py",k:"import"},
+  {s:"services/__init__.py",t:"services/user.py",k:"import"},
+  {s:"services/booking.py",t:"models.py",k:"import"},{s:"services/booking.py",t:"schemas.py",k:"import"},
+  {s:"services/flight.py",t:"models.py",k:"import"},{s:"services/flight.py",t:"schemas.py",k:"import"},
+  {s:"services/user.py",t:"models.py",k:"import"},{s:"services/user.py",t:"schemas.py",k:"import"},
+  {s:"tests/conftest.py",t:"db.py",k:"import"},{s:"tests/conftest.py",t:"models.py",k:"import"},
+  {s:"tests/conftest.py",t:"server.py",k:"import"},
+  {s:"tests/test_rest.py",t:"models.py",k:"import"},
+  {s:"tests/test_services.py",t:"models.py",k:"import"},{s:"tests/test_services.py",t:"schemas.py",k:"import"},
+  {s:"tests/test_services.py",t:"services/__init__.py",k:"import"},
+  {s:"tests/test_services.py",t:"services/booking.py",k:"import"},
+  {s:"tests/test_services.py",t:"services/flight.py",k:"import"},
+  {s:"tests/test_services.py",t:"services/user.py",k:"import"},
+  // contains
+  {s:"db.py",t:"db.py::SessionLocal",k:"contains"},{s:"db.py",t:"db.py::get_db",k:"contains"},{s:"db.py",t:"db.py::init_db",k:"contains"},
+  {s:"models.py",t:"models.py::Booking",k:"contains"},{s:"models.py",t:"models.py::Flight",k:"contains"},{s:"models.py",t:"models.py::User",k:"contains"},
+  {s:"schemas.py",t:"schemas.py::ErrorResponse",k:"contains"},{s:"schemas.py",t:"schemas.py::FlightOut",k:"contains"},
+  {s:"seed.py",t:"seed.py::seed",k:"contains"},
+  {s:"server.py",t:"server.py::lifespan",k:"contains"},{s:"server.py",t:"server.py::health_check",k:"contains"},
+  {s:"server.py",t:"server.py::register_user_endpoint",k:"contains"},{s:"server.py",t:"server.py::get_user_endpoint",k:"contains"},
+  {s:"server.py",t:"server.py::book_flight_endpoint",k:"contains"},{s:"server.py",t:"server.py::cancel_booking_endpoint",k:"contains"},
+  {s:"server.py",t:"server.py::get_flights",k:"contains"},{s:"server.py",t:"server.py::get_user_bookings",k:"contains"},
+  {s:"services/booking.py",t:"services/booking.py::book_flight",k:"contains"},
+  {s:"services/booking.py",t:"services/booking.py::cancel_booking",k:"contains"},
+  {s:"services/booking.py",t:"services/booking.py::get_bookings",k:"contains"},
+  {s:"services/flight.py",t:"services/flight.py::_flight_to_out",k:"contains"},
+  {s:"services/flight.py",t:"services/flight.py::list_flights",k:"contains"},
+  {s:"services/user.py",t:"services/user.py::is_valid_email",k:"contains"},
+  {s:"services/user.py",t:"services/user.py::register_user",k:"contains"},
+  {s:"services/user.py",t:"services/user.py::get_user",k:"contains"},
+  {s:"services/user.py",t:"services/user.py::update_user",k:"contains"},
+  {s:"tests/conftest.py",t:"tests/conftest.py::client",k:"contains"},
+  {s:"tests/conftest.py",t:"tests/conftest.py::db_session",k:"contains"},
+  {s:"tests/conftest.py",t:"tests/conftest.py::sample_booking_data",k:"contains"},
+  {s:"tests/conftest.py",t:"tests/conftest.py::sample_flight_data",k:"contains"},
+  {s:"tests/conftest.py",t:"tests/conftest.py::sample_user_data",k:"contains"},
+  // calls
+  {s:"seed.py::seed",t:"db.py::SessionLocal",k:"calls"},
+  {s:"seed.py::seed",t:"models.py::User",k:"calls"},{s:"seed.py::seed",t:"models.py::Flight",k:"calls"},
+  {s:"seed.py::seed",t:"models.py::Booking",k:"calls"},
+  {s:"server.py::lifespan",t:"db.py::init_db",k:"calls"},{s:"server.py::lifespan",t:"seed.py::seed",k:"calls"},
+  {s:"services/booking.py::book_flight",t:"models.py::Booking",k:"calls"},
+  {s:"services/booking.py::book_flight",t:"schemas.py::ErrorResponse",k:"calls"},
+  {s:"services/booking.py::cancel_booking",t:"schemas.py::ErrorResponse",k:"calls"},
+  {s:"services/flight.py::_flight_to_out",t:"schemas.py::FlightOut",k:"calls"},
+  {s:"services/flight.py::list_flights",t:"services/flight.py::_flight_to_out",k:"calls"},
+  {s:"services/user.py::register_user",t:"services/user.py::is_valid_email",k:"calls"},
+  {s:"services/user.py::register_user",t:"models.py::User",k:"calls"},
+  {s:"services/user.py::register_user",t:"schemas.py::ErrorResponse",k:"calls"},
+  {s:"services/user.py::get_user",t:"services/user.py::is_valid_email",k:"calls"},
+  {s:"services/user.py::get_user",t:"schemas.py::ErrorResponse",k:"calls"},
+  {s:"services/user.py::update_user",t:"schemas.py::ErrorResponse",k:"calls"},
+];
+
+// ── CONFIG ────────────────────────────────────────────────────────────────────
+const KIND = {
+  file:   {fill:"#1a2a40",stroke:"#58a6ff",r:13},
+  model:  {fill:"#2d1a1a",stroke:"#f85149",r:10},
+  schema: {fill:"#2a2010",stroke:"#d29922",r:10},
+  fn:     {fill:"#142014",stroke:"#3fb950",r:7},
+};
+const LINK_W  = {import:1, contains:.8, calls:1.5};
+
+// ── STATE ─────────────────────────────────────────────────────────────────────
+let showImport=true, showContains=true, showCalls=true, showTests=false;
+let searchQ="";
+let pinned=null;  // highlighted node id
+
+let nodes=[], links=[];
+let nodeMap={};
+let linkEls={}, nodeEls={};
+let tr={x:0,y:0,k:1};  // pan/zoom transform
+
+// ── BUILD ─────────────────────────────────────────────────────────────────────
+function W(){ return document.getElementById("canvas").clientWidth; }
+function H(){ return document.getElementById("canvas").clientHeight; }
+
+function build(){
+  nodes = RAW_NODES
+    .filter(n=>showTests||!n.test)
+    .map(n=>({
+      ...n,
+      x: W()/2+(Math.random()-.5)*460,
+      y: H()/2+(Math.random()-.5)*360,
+      vx:0, vy:0, _pin:false
+    }));
+  nodeMap={};
+  nodes.forEach(n=>nodeMap[n.id]=n);
+
+  links = RAW_EDGES.filter(e=>{
+    if(!nodeMap[e.s]||!nodeMap[e.t]) return false;
+    if(e.k==="import"   && !showImport)   return false;
+    if(e.k==="contains" && !showContains) return false;
+    if(e.k==="calls"    && !showCalls)    return false;
+    return true;
+  }).map(e=>({...e}));
+
+  document.getElementById("stats").textContent =
+    `${nodes.length} nodes · ${links.length} edges`;
+}
+
+// ── SIM ───────────────────────────────────────────────────────────────────────
+let step=0, raf=null;
+
+function startSim(){
+  step=0;
+  if(raf) cancelAnimationFrame(raf);
+  function loop(){
+    tick(); render();
+    step++;
+    if(step<350) raf=requestAnimationFrame(loop);
+  }
+  raf=requestAnimationFrame(loop);
+}
+
+function tick(){
+  const alpha=Math.max(.002, 1-step/260);
+
+  // repulsion
+  for(let i=0;i<nodes.length;i++){
+    for(let j=i+1;j<nodes.length;j++){
+      const a=nodes[i],b=nodes[j];
+      const dx=b.x-a.x, dy=b.y-a.y;
+      const d2=dx*dx+dy*dy||.01;
+      const d=Math.sqrt(d2);
+      const strength=340*340/d2;
+      const fx=dx/d*strength, fy=dy/d*strength;
+      a.vx-=fx; a.vy-=fy; b.vx+=fx; b.vy+=fy;
+    }
+  }
+
+  // attraction along links
+  links.forEach(l=>{
+    const a=nodeMap[l.s], b=nodeMap[l.t]; if(!a||!b) return;
+    const dx=b.x-a.x, dy=b.y-a.y;
+    const d=Math.sqrt(dx*dx+dy*dy)||.01;
+    const ideal = l.k==="contains"?55:l.k==="calls"?110:200;
+    const f=(d-ideal)*.05;
+    const fx=dx/d*f, fy=dy/d*f;
+    a.vx+=fx; a.vy+=fy; b.vx-=fx; b.vy-=fy;
+  });
+
+  // center gravity
+  let cx=0,cy=0;
+  nodes.forEach(n=>{cx+=n.x;cy+=n.y});
+  cx/=nodes.length; cy/=nodes.length;
+  const gx=W()/2, gy=H()/2;
+  nodes.forEach(n=>{ n.vx+=(gx-cx)*.012; n.vy+=(gy-cy)*.012; });
+
+  // integrate
+  nodes.forEach(n=>{
+    if(n._pin){n.vx=0;n.vy=0;return;}
+    n.vx*=.72; n.vy*=.72;
+    n.x+=n.vx*alpha; n.y+=n.vy*alpha;
+  });
+}
+
+// ── INIT SVG ──────────────────────────────────────────────────────────────────
+function initSVG(){
+  const scene=document.getElementById("scene");
+  while(scene.firstChild) scene.removeChild(scene.firstChild);
+  linkEls={}; nodeEls={};
+
+  // links first (behind nodes)
+  links.forEach((l,i)=>{
+    const el=svg("line");
+    el.className.baseVal="link link-"+l.k;
+    el.setAttribute("stroke-width", LINK_W[l.k]);
+    el.setAttribute("marker-end","url(#m-"+l.k+")");
+    scene.appendChild(el);
+    linkEls[i]=el;
+  });
+
+  // nodes
+  nodes.forEach(n=>{
+    const cfg=KIND[n.kind]||KIND.fn;
+    const g=svg("g");
+    g.className.baseVal="node";
+    g.setAttribute("data-id",n.id);
+
+    const c=svg("circle");
+    c.setAttribute("r",cfg.r);
+    c.setAttribute("fill",cfg.fill);
+    c.setAttribute("stroke",cfg.stroke);
+    c.setAttribute("stroke-width",n.kind==="file"?1.8:1.3);
+    g.appendChild(c);
+
+    // glow ring on hover
+    const glow=svg("circle");
+    glow.setAttribute("r",cfg.r+4);
+    glow.setAttribute("fill","none");
+    glow.setAttribute("stroke",cfg.stroke);
+    glow.setAttribute("stroke-width","1");
+    glow.setAttribute("opacity","0");
+    glow.style.transition="opacity .15s";
+    g.appendChild(glow);
+
+    const label=shortLabel(n.id);
+    const t=svg("text");
+    t.setAttribute("x", cfg.r+4);
+    t.setAttribute("y", 0);
+    t.setAttribute("font-size","9px");
+    t.setAttribute("fill","#9aa5b4");
+    t.setAttribute("dominant-baseline","central");
+    t.textContent=label.length>22?label.slice(0,20)+"…":label;
+    g.appendChild(t);
+
+    // events
+    g.addEventListener("mouseenter",e=>{
+      glow.setAttribute("opacity","0.5");
+      showTip(n,e);
+    });
+    g.addEventListener("mousemove", moveTooltip);
+    g.addEventListener("mouseleave",()=>{
+      glow.setAttribute("opacity","0");
+      hideTip();
+    });
+    g.addEventListener("click",()=>highlight(n.id));
+
+    // drag
+    let dragging=false, ox=0,oy=0;
+    g.addEventListener("pointerdown",e=>{
+      e.stopPropagation();
+      dragging=true; n._pin=true;
+      ox=(e.clientX-tr.x)/tr.k - n.x;
+      oy=(e.clientY-tr.y)/tr.k - n.y;
+      g.setPointerCapture(e.pointerId);
+    });
+    g.addEventListener("pointermove",e=>{
+      if(!dragging) return;
+      n.x=(e.clientX-tr.x)/tr.k-ox;
+      n.y=(e.clientY-tr.y)/tr.k-oy;
+      render();
+    });
+    g.addEventListener("pointerup",()=>{dragging=false;});
+
+    scene.appendChild(g);
+    nodeEls[n.id]=g;
+  });
+}
+
+function svg(tag){ return document.createElementNS("http://www.w3.org/2000/svg",tag); }
+
+// ── RENDER ────────────────────────────────────────────────────────────────────
+function render(){
+  // links
+  links.forEach((l,i)=>{
+    const a=nodeMap[l.s], b=nodeMap[l.t]; if(!a||!b) return;
+    const el=linkEls[i];
+    const cfg=KIND[b.kind]||KIND.fn;
+    const r=cfg.r;
+    const dx=b.x-a.x, dy=b.y-a.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+    const ex=b.x-dx/d*(r+5), ey=b.y-dy/d*(r+5);
+    const ax=a.x, ay=a.y;
+    el.setAttribute("x1", ax*tr.k+tr.x);
+    el.setAttribute("y1", ay*tr.k+tr.y);
+    el.setAttribute("x2", ex*tr.k+tr.x);
+    el.setAttribute("y2", ey*tr.k+tr.y);
+  });
+
+  // nodes
+  nodes.forEach(n=>{
+    const g=nodeEls[n.id]; if(!g) return;
+    g.setAttribute("transform",`translate(${n.x*tr.k+tr.x},${n.y*tr.k+tr.y}) scale(${tr.k})`);
+  });
+}
+
+// ── HIGHLIGHT ─────────────────────────────────────────────────────────────────
+function highlight(id){
+  pinned = pinned===id ? null : id;
+  applyHighlight();
+}
+
+function applyHighlight(){
+  if(!pinned){
+    Object.values(nodeEls).forEach(g=>g.classList.remove("lit","dimmed"));
+    Object.values(linkEls).forEach(l=>l.classList.remove("lit","dimmed"));
+    return;
+  }
+  const nbrs=new Set([pinned]);
+  links.forEach(l=>{ if(l.s===pinned) nbrs.add(l.t); if(l.t===pinned) nbrs.add(l.s); });
+  Object.entries(nodeEls).forEach(([id,g])=>{
+    g.classList.toggle("lit",   id===pinned);
+    g.classList.toggle("dimmed",!nbrs.has(id));
+  });
+  Object.entries(linkEls).forEach(([i,l])=>{
+    const lk=links[i];
+    const con=lk.s===pinned||lk.t===pinned;
+    l.classList.toggle("lit",  con);
+    l.classList.toggle("dimmed",!con);
+  });
+}
+
+// ── SEARCH ────────────────────────────────────────────────────────────────────
+function applySearch(){
+  const q=searchQ.toLowerCase().trim();
+  nodes.forEach(n=>{
+    const g=nodeEls[n.id]; if(!g) return;
+    g.style.opacity = (!q||n.id.toLowerCase().includes(q)) ? 1 : .1;
+  });
+}
+
+// ── TOOLTIP ───────────────────────────────────────────────────────────────────
+const tip=document.getElementById("tip");
+function showTip(n,e){
+  const cfg=KIND[n.kind]||KIND.fn;
+  const inc=links.filter(l=>l.t===n.id).length;
+  const out=links.filter(l=>l.s===n.id).length;
+  tip.innerHTML=`
+    <div class="t-id">${n.id}</div>
+    <div class="t-kind" style="color:${cfg.stroke}">${n.kind}</div>
+    <div class="t-row">incoming <span>${inc}</span></div>
+    <div class="t-row">outgoing <span>${out}</span></div>
+  `;
+  tip.style.opacity=1;
+  moveTooltip(e);
+}
+function moveTooltip(e){
+  let x=e.clientX+16, y=e.clientY-12;
+  if(x+270>window.innerWidth) x=e.clientX-282;
+  if(y+100>window.innerHeight) y=e.clientY-110;
+  tip.style.left=x+"px"; tip.style.top=y+"px";
+}
+function hideTip(){ tip.style.opacity=0; }
+
+// ── PAN / ZOOM ────────────────────────────────────────────────────────────────
+const svgEl=document.getElementById("svg");
+let panning=false, px=0,py=0, tx0=0,ty0=0;
+svgEl.addEventListener("pointerdown",e=>{
+  if(e.target.closest(".node")) return;
+  panning=true; px=e.clientX; py=e.clientY; tx0=tr.x; ty0=tr.y;
+  svgEl.setPointerCapture(e.pointerId);
+});
+svgEl.addEventListener("pointermove",e=>{
+  if(!panning) return;
+  tr.x=tx0+(e.clientX-px); tr.y=ty0+(e.clientY-py); render();
+});
+svgEl.addEventListener("pointerup",()=>panning=false);
+svgEl.addEventListener("wheel",e=>{
+  e.preventDefault();
+  const f=e.deltaY>0?.88:1.12;
+  const rect=svgEl.getBoundingClientRect();
+  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  tr.x=mx-(mx-tr.x)*f; tr.y=my-(my-tr.y)*f;
+  tr.k=Math.max(.15,Math.min(5,tr.k*f));
+  render();
+},{passive:false});
+
+// ── CONTROLS ──────────────────────────────────────────────────────────────────
+function rebuild(){
+  build(); initSVG(); startSim(); applyHighlight(); applySearch();
+}
+document.getElementById("chk-import").onchange  =e=>{showImport  =e.target.checked;rebuild();};
+document.getElementById("chk-contains").onchange=e=>{showContains=e.target.checked;rebuild();};
+document.getElementById("chk-calls").onchange   =e=>{showCalls   =e.target.checked;rebuild();};
+document.getElementById("chk-tests").onchange   =e=>{showTests   =e.target.checked;rebuild();};
+document.getElementById("search").oninput       =e=>{searchQ=e.target.value;applySearch();};
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+function shortLabel(id){
+  const sep=id.indexOf("::");
+  if(sep===-1){ const p=id.split("/"); return p[p.length-1]; }
+  return id.slice(sep+2);
+}
+
+// ── BOOT ──────────────────────────────────────────────────────────────────────
+rebuild();
+window.addEventListener("resize",()=>render());
+</script>
+</body>
+</html>
