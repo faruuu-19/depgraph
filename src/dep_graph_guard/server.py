@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -340,6 +341,18 @@ server.tool()(build_dependency_graph_detailed)
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Console-script entry point — runs the server over stdio."""
-    print("dep-graph-guard MCP server starting", file=sys.stderr)
-    asyncio.run(server.run_stdio_async())
+    """Console-script entry point.
+
+    Runs over ``stdio`` by default (how an agent like Bob or Claude Code
+    registers this server locally via ``mcp.json``). Set
+    ``MCP_TRANSPORT=http`` to instead serve MCP over streamable-HTTP on
+    ``0.0.0.0:$PORT`` (used for the hosted deployment).
+    """
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
+    if transport in ("http", "streamable-http"):
+        port = int(os.environ.get("PORT", "8000"))
+        print(f"dep-graph-guard MCP server starting on streamable-http :{port}", file=sys.stderr)
+        server.run(transport="streamable-http", host="0.0.0.0", port=port, stateless_http=True)
+    else:
+        print("dep-graph-guard MCP server starting on stdio", file=sys.stderr)
+        asyncio.run(server.run_stdio_async())
